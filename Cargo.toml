@@ -1,0 +1,19 @@
+[package]
+name = "crust"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["from"]
+
+[[bin]]
+name = "crust"
+path = "src/main.rs"
+
+[lib]
+name = "crust"
+path = "src/lib.rs"
+
+[dependencies]
+itertools = "0.10.5"
+thiserror = "1.0.39"

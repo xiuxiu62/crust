@@ -1,0 +1,16 @@
+[package]
+name = "from"
+version = "0.1.0"
+edition = "2021"
+
+# [workspace]
+# members = ["tests"]
+
+[lib]
+name = "from"
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+quote = "1.0.26"
+syn = { version = "2.0.4", features = ["fold", "full"] }
