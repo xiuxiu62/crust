@@ -50,7 +50,6 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Vec<Expression> {
-        // let mut stream: Peekable<Enumerate<Chars>> = source.chars().enumerate().peekable();
         let mut exprs = vec![];
         while let Some(expr) = self.parse_next() {
             exprs.push(expr);
@@ -77,7 +76,6 @@ impl<'a> Parser<'a> {
                 '`' => return some_expr(KeyWord::BackTick),
                 ',' => return some_expr(KeyWord::Comma),
                 ':' => return some_expr(KeyWord::Colon),
-                // ';' => append(&mut exprs, KeyWord::SemiColon),
                 // Delimiter
                 '(' => return some_expr(Delimiter::LParen),
                 ')' => return some_expr(Delimiter::RParen),
@@ -86,72 +84,76 @@ impl<'a> Parser<'a> {
                 '[' => return some_expr(Delimiter::LBracket),
                 ']' => return some_expr(Delimiter::RBracket),
                 // String
-                '"' => {
-                    let mut previous_char = ' ';
-                    let xs: String = self
-                        .stream
-                        .borrow_mut()
-                        .take_while(|(_, char)| {
-                            let is_terminated = *char == '"' && previous_char != '\\';
-                            previous_char = *char;
-
-                            !is_terminated
-                        })
-                        .map(|(_, char)| char)
-                        .collect();
-
-                    return some_expr(Primitive::from(xs));
-                }
+                '"' => return some_expr(self.parse_string()),
                 // Comment
-                ';' => {
-                    let mut previous_char = ' ';
-                    let mut xs: String = self
-                        .stream
-                        .borrow_mut()
-                        .skip_while(|(_, char)| *char == ';')
-                        // capture comment, removing carrige return on windows
-                        .take_while(|(_, char)| {
-                            #[cfg(windows)]
-                            let is_terminated = previous_char == '\r' && *char == '\n';
-                            #[cfg(not(windows))]
-                            let is_terminated = *char == '\n';
-
-                            previous_char = *char;
-
-                            !is_terminated
-                        })
-                        .map(|(_, char)| char)
-                        .collect();
-
-                    #[cfg(windows)]
-                    xs.pop();
-
-                    return Some(Expression::Comment(xs));
-                }
+                ';' => return Some(self.parse_comment()),
                 // Other
-                x => {
-                    let xs: String = self
-                        .stream
-                        .borrow_mut()
-                        .peeking_take_while(|(_, char)| {
-                            !(char.is_whitespace() || is_reserved_char(*char))
-                        })
-                        .map(|(_, char)| char)
-                        .collect();
-                    let capture = format!("{x}{xs}");
-
-                    // consume as primitive
-                    if let Some(expr) = maybe_parse_primitive(&capture) {
-                        return Some(expr);
-                    }
-
-                    // otherwise consume as identifier
-                    return Some(Expression::Ident(capture));
-                }
+                char => return Some(self.parse_other(char)),
             }
         }
 
         None
+    }
+
+    fn parse_string(&mut self) -> Primitive {
+        let mut previous_char = ' ';
+        let xs: String = self
+            .stream
+            .borrow_mut()
+            .take_while(|(_, char)| {
+                let is_terminated = *char == '"' && previous_char != '\\';
+                previous_char = *char;
+
+                !is_terminated
+            })
+            .map(|(_, char)| char)
+            .collect();
+
+        Primitive::from(xs)
+    }
+
+    fn parse_comment(&mut self) -> Expression {
+        let mut previous_char = ' ';
+        let mut xs: String = self
+            .stream
+            .borrow_mut()
+            .skip_while(|(_, char)| *char == ';')
+            // capture comment, removing carrige return on windows
+            .take_while(|(_, char)| {
+                #[cfg(windows)]
+                let is_terminated = previous_char == '\r' && *char == '\n';
+                #[cfg(not(windows))]
+                let is_terminated = *char == '\n';
+
+                previous_char = *char;
+
+                !is_terminated
+            })
+            .map(|(_, char)| char)
+            .collect();
+
+        #[cfg(windows)]
+        xs.pop();
+
+        Expression::Comment(xs)
+    }
+
+    fn parse_other(&mut self, first_character: char) -> Expression {
+        let xs: String = self
+            .stream
+            .borrow_mut()
+            .peeking_take_while(|(_, char)| !(char.is_whitespace() || is_reserved_char(*char)))
+            .map(|(_, char)| char)
+            .collect();
+        let capture = format!("{first_character}{xs}");
+
+        // consume as primitive
+        if let Some(expr) = maybe_parse_primitive(&capture) {
+            return expr;
+        }
+
+        // otherwise consume as identifier
+        Expression::Ident(capture)
     }
 }
 
@@ -191,11 +193,11 @@ fn delimiters_match(exprs: &[Expression]) -> bool {
 
 #[derive(Debug)]
 enum Expression {
-    KeyWord(KeyWord),
     Delimiter(Delimiter),
     Primitive(Primitive),
     Ident(String),
     Comment(String),
+    KeyWord(KeyWord),
 }
 
 impl From<KeyWord> for Expression {
