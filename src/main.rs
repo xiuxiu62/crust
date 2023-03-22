@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use std::{
-    borrow::BorrowMut,
+    borrow::{BorrowMut, Cow},
     io::{self, Write},
     iter::{Enumerate, Peekable},
     mem,
@@ -9,15 +9,6 @@ use std::{
 
 fn main() -> io::Result<()> {
     repl()
-
-    // let mut xs = [1, 2, 3, 4, 5].into_iter();
-    // let x: Vec<u8> = xs.borrow_mut().take_while(|n| *n != 3).collect();
-    // let xs: Vec<u8> = xs.collect();
-
-    // println!("{x:?}");
-    // println!("{xs:?}");
-
-    // Ok(())
 }
 
 fn repl() -> io::Result<()> {
@@ -36,93 +27,132 @@ fn repl() -> io::Result<()> {
         }
 
         let source = mem::take(&mut line);
-        let exprs = parse(&source);
+        let mut parser = Parser::new(&source);
+        let exprs = parser.parse();
+
         println!("{exprs:?}");
     }
 
     Ok(())
 }
 
-fn parse(source: &str) -> Vec<Expression> {
-    let mut exprs = vec![];
-    fn append<E>(exprs: &mut Vec<Expression>, into_expr: E)
-    where
-        Expression: From<E>,
-    {
-        exprs.push(Expression::from(into_expr));
-    }
+struct Parser<'a> {
+    _source: Cow<'a, str>,
+    stream: Peekable<Enumerate<Chars<'a>>>,
+}
 
-    let mut stream: Peekable<Enumerate<Chars>> = source.chars().enumerate().peekable();
-    while let Some((_i, char)) = stream.next() {
-        match char {
-            // skip whitespace
-            char if char.is_whitespace() => {}
-            // KeyWord
-            '\'' => append(&mut exprs, KeyWord::SingleQuote),
-            '`' => append(&mut exprs, KeyWord::BackTick),
-            ',' => append(&mut exprs, KeyWord::Comma),
-            ':' => append(&mut exprs, KeyWord::Colon),
-            // ';' => append(&mut exprs, KeyWord::SemiColon),
-            // Delimiter
-            '(' => append(&mut exprs, Delimiter::LParen),
-            ')' => append(&mut exprs, Delimiter::RParen),
-            '{' => append(&mut exprs, Delimiter::LBrace),
-            '}' => append(&mut exprs, Delimiter::RBrace),
-            '[' => append(&mut exprs, Delimiter::LBracket),
-            ']' => append(&mut exprs, Delimiter::RBracket),
-            // String
-            '"' => {
-                let mut previous_char = ' ';
-                let xs: String = stream
-                    .borrow_mut()
-                    .take_while(|(_, char)| {
-                        let is_terminated = *char == '"' && previous_char != '\\';
-                        previous_char = *char;
-
-                        !is_terminated
-                    })
-                    .map(|(_, char)| char)
-                    .collect();
-
-                append(&mut exprs, Primitive::from(xs))
-            }
-            // Comment
-            ';' => {
-                let xs: String = stream
-                    .borrow_mut()
-                    .skip_while(|(_, char)| *char == ';')
-                    // TODO: roll condition into a valid_ident_char method
-                    .take_while(|(_, char)| *char != '\n')
-                    .map(|(_, char)| char)
-                    .collect();
-
-                exprs.push(Expression::Comment(xs));
-            }
-            // Other
-            x => {
-                let xs: String = stream
-                    .borrow_mut()
-                    // TODO: roll condition into a valid_ident_char method
-                    .peeking_take_while(|(_, char)| {
-                        !(char.is_whitespace() || is_reserved_char(*char))
-                    })
-                    .map(|(_, char)| char)
-                    .collect();
-                let capture = format!("{x}{xs}");
-
-                // consume as primitive
-                if let Some(expr) = maybe_parse_primitive(&capture) {
-                    exprs.push(expr);
-                    continue;
-                }
-
-                // otherwise consume as identifier
-                exprs.push(Expression::Ident(capture));
-            }
+impl<'a> Parser<'a> {
+    pub fn new(source: &'a str) -> Self {
+        Self {
+            _source: Cow::from(source),
+            stream: source.chars().enumerate().peekable(),
         }
     }
 
-    exprs
+    pub fn parse(&mut self) -> Vec<Expression> {
+        // let mut stream: Peekable<Enumerate<Chars>> = source.chars().enumerate().peekable();
+        let mut exprs = vec![];
+        while let Some(expr) = self.parse_next() {
+            exprs.push(expr);
+        }
+
+        exprs
+    }
+
+    pub fn parse_next(&mut self) -> Option<Expression> {
+        #[inline]
+        fn some_expr<T>(expr: T) -> Option<Expression>
+        where
+            Expression: From<T>,
+        {
+            Some(Expression::from(expr))
+        }
+
+        while let Some((_i, char)) = self.stream.next() {
+            match char {
+                // skip whitespace
+                char if char.is_whitespace() => {}
+                // KeyWord
+                '\'' => return some_expr(KeyWord::SingleQuote),
+                '`' => return some_expr(KeyWord::BackTick),
+                ',' => return some_expr(KeyWord::Comma),
+                ':' => return some_expr(KeyWord::Colon),
+                // ';' => append(&mut exprs, KeyWord::SemiColon),
+                // Delimiter
+                '(' => return some_expr(Delimiter::LParen),
+                ')' => return some_expr(Delimiter::RParen),
+                '{' => return some_expr(Delimiter::LBrace),
+                '}' => return some_expr(Delimiter::RBrace),
+                '[' => return some_expr(Delimiter::LBracket),
+                ']' => return some_expr(Delimiter::RBracket),
+                // String
+                '"' => {
+                    let mut previous_char = ' ';
+                    let xs: String = self
+                        .stream
+                        .borrow_mut()
+                        .take_while(|(_, char)| {
+                            let is_terminated = *char == '"' && previous_char != '\\';
+                            previous_char = *char;
+
+                            !is_terminated
+                        })
+                        .map(|(_, char)| char)
+                        .collect();
+
+                    return some_expr(Primitive::from(xs));
+                }
+                // Comment
+                ';' => {
+                    let mut previous_char = ' ';
+                    let mut xs: String = self
+                        .stream
+                        .borrow_mut()
+                        .skip_while(|(_, char)| *char == ';')
+                        // capture comment, removing carrige return on windows
+                        .take_while(|(_, char)| {
+                            #[cfg(windows)]
+                            let is_terminated = previous_char == '\r' && *char == '\n';
+                            #[cfg(not(windows))]
+                            let is_terminated = *char == '\n';
+
+                            previous_char = *char;
+
+                            !is_terminated
+                        })
+                        .map(|(_, char)| char)
+                        .collect();
+
+                    #[cfg(windows)]
+                    xs.pop();
+
+                    return Some(Expression::Comment(xs));
+                }
+                // Other
+                x => {
+                    let xs: String = self
+                        .stream
+                        .borrow_mut()
+                        .peeking_take_while(|(_, char)| {
+                            !(char.is_whitespace() || is_reserved_char(*char))
+                        })
+                        .map(|(_, char)| char)
+                        .collect();
+                    let capture = format!("{x}{xs}");
+
+                    // consume as primitive
+                    if let Some(expr) = maybe_parse_primitive(&capture) {
+                        return Some(expr);
+                    }
+
+                    // otherwise consume as identifier
+                    return Some(Expression::Ident(capture));
+                }
+            }
+        }
+
+        None
+    }
 }
 
 #[inline]
@@ -422,3 +452,11 @@ fn maybe_parse_bool(value: &str) -> Option<bool> {
 //         })
 //     }))
 // }
+
+#[inline]
+const fn newline() -> &'static str {
+    #[cfg(windows)]
+    return "\r\n";
+
+    return "\n";
+}
